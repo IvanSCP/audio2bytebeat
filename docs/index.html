@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio to Bytebeat</title>
+<style>
+:root {
+  --bg: #fafafa;
+  --fg: #1d1d1f;
+  --muted: #6b6b70;
+  --card: #ffffff;
+  --border: #d4d4d8;
+  --accent: #2563eb;
+  --accent-fg: #ffffff;
+  --error: #b91c1c;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121214;
+    --fg: #ececee;
+    --muted: #9b9ba3;
+    --card: #1c1c20;
+    --border: #3a3a42;
+    --accent: #3b82f6;
+    --error: #f87171;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 1.6rem; margin: 0 0 8px; }
+.lead { color: var(--muted); margin: 0 0 24px; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+label { display: block; font-size: 0.9rem; color: var(--muted); }
+input[type="number"], input[type="file"] {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+.check, .radio { display: flex; align-items: center; gap: 8px; color: var(--fg); margin-top: 12px; }
+.radios { display: flex; flex-wrap: wrap; gap: 4px 20px; }
+button {
+  font: inherit;
+  padding: 8px 14px;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:disabled { opacity: 0.55; cursor: default; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+textarea {
+  width: 100%;
+  height: 160px;
+  margin-top: 8px;
+  padding: 8px;
+  font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+}
+#status { min-height: 1.5em; margin: 12px 0 0; color: var(--muted); }
+#status.error { color: var(--error); }
+footer { color: var(--muted); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Audio to Bytebeat</h1>
+  <p class="lead">Turn an audio file into a bytebeat formula for Dollchan Bytebeat Composer. Everything runs in your browser, the file is never uploaded.</p>
+
+  <section class="card">
+    <label>Audio file
+      <input type="file" id="file" accept="audio/*,.mp3,.wav,.ogg,.oga,.opus,.flac,.m4a,.aac">
+    </label>
+    <div class="grid">
+      <label>Sample rate (Hz)<input type="number" id="rate" value="8000" min="1000" max="48000" step="1"></label>
+      <label>Start (s)<input type="number" id="start" value="0" min="0" step="any"></label>
+      <label>Length (s, empty = all)<input type="number" id="duration" min="0" step="any" placeholder="whole file"></label>
+      <label>High-pass (Hz, 0 = off)<input type="number" id="highpass" value="40" min="0" step="any"></label>
+      <label>Low-pass (Hz, 0 = off)<input type="number" id="lowpass" min="0" step="any" placeholder="auto"></label>
+    </div>
+    <label class="check"><input type="checkbox" id="normalize" checked> Normalize peak level</label>
+    <div class="radios" role="radiogroup" aria-label="Output type">
+      <label class="radio"><input type="radio" name="format" value="formula" checked> Formula</label>
+      <label class="radio"><input type="radio" name="format" value="link"> Dollchan link</label>
+      <label class="radio"><input type="radio" name="format" value="html"> HTML redirect page</label>
+    </div>
+    <div class="actions"><button id="go" class="primary">Convert</button></div>
+    <p id="status" role="status"></p>
+  </section>
+
+  <section class="card" id="result" hidden>
+    <textarea id="output" readonly spellcheck="false"></textarea>
+    <div class="actions">
+      <button id="copy">Copy</button>
+      <button id="download">Download</button>
+      <button id="open">Open in Dollchan</button>
+      <button id="preview">Preview</button>
+    </div>
+  </section>
+
+  <footer>
+    Paste the formula into Dollchan Bytebeat Composer in Bytebeat mode at the same sample rate. Supported input formats depend on your browser.
+  </footer>
+</main>
+<script>
+const DOLLCHAN_URL = "https://dollchan.net/bytebeat/#v3b64";
+const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const FORMULA_HEAD = "((S,A,i=t%(S.length*.75|0),g=i/3|0,r=i%3,a=k=>Math.max(0,A.indexOf(S[4*g+k])))=>(a(0)<<18|a(1)<<12|a(2)<<6|a(3))>>16-8*r&255)(\"";
+const FORMULA_TAIL = "\",\"" + ALPHABET + "\")";
+const BUTTERWORTH_Q_DB = -3.0103;
+
+function toBase64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s).replace(/=+$/, "");
+}
+
+async function deflateRaw(bytes) {
+  const stream = new CompressionStream("deflate-raw");
+  const writer = stream.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+}
+
+function makeFormula(raw) {
+  return FORMULA_HEAD + toBase64(raw) + FORMULA_TAIL;
+}
+
+async function makeLink(code, rate) {
+  const json = JSON.stringify({ code: code, sampleRate: rate, mode: "Bytebeat" });
+  const packed = await deflateRaw(new TextEncoder().encode(json));
+  return DOLLCHAN_URL + toBase64(packed);
+}
+
+function makeHtml(url) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bytebeat</title>
+</head>
+<body>
+<p>Redirecting to Dollchan Bytebeat Composer... If nothing happens, <a id="l" href="#">click here</a>.</p>
+<script>
+var u = "${url}";
+document.getElementById("l").href = u;
+location.replace(u);
+<\/script>
+</body>
+</html>
+`;
+}
+
+function toU8(samples, sourceRate, rate, gain) {
+  const ratio = sourceRate / rate;
+  const n = Math.floor(samples.length / ratio);
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    let v;
+    if (ratio > 1) {
+      const from = Math.floor(i * ratio);
+      const to = Math.min(samples.length, Math.max(from + 1, Math.floor((i + 1) * ratio)));
+      let sum = 0;
+      for (let j = from; j < to; j++) sum += samples[j];
+      v = sum / (to - from);
+    } else {
+      const pos = i * ratio;
+      const j = Math.floor(pos);
+      const a = samples[j];
+      const b = samples[Math.min(j + 1, samples.length - 1)];
+      v = a + (b - a) * (pos - j);
+    }
+    out[i] = Math.max(0, Math.min(255, Math.round(v * gain * 127.5 + 127.5)));
+  }
+  return out;
+}
+
+async function decodeAndFilter(file, start, duration, highpass, lowpass) {
+  const encoded = await file.arrayBuffer();
+  const decoder = new OfflineAudioContext(1, 1, 44100);
+  const audio = await decoder.decodeAudioData(encoded);
+  const sr = audio.sampleRate;
+  const from = Math.min(start, audio.duration);
+  const length = duration > 0 ? Math.min(duration, audio.duration - from) : audio.duration - from;
+  if (length <= 0) throw new Error("Nothing to convert, check the start and length values.");
+
+  const ctx = new OfflineAudioContext(1, Math.ceil(length * sr), sr);
+  const source = ctx.createBufferSource();
+  source.buffer = audio;
+  let last = source;
+  const addFilter = (type, freq) => {
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = freq;
+    f.Q.value = BUTTERWORTH_Q_DB;
+    last.connect(f);
+    last = f;
+  };
+  if (highpass > 0) addFilter("highpass", highpass);
+  if (lowpass > 0) addFilter("lowpass", lowpass);
+  last.connect(ctx.destination);
+  source.start(0, from, length);
+  const rendered = await ctx.startRendering();
+  return { samples: rendered.getChannelData(0), sourceRate: sr };
+}
+
+const $ = id => document.getElementById(id);
+const state = { texts: {}, names: {}, raw: null, rate: 8000, base: "audio", url: "" };
+let playing = null;
+
+function readNumber(id, fallback) {
+  const v = parseFloat($(id).value);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+function setStatus(text, isError) {
+  $("status").textContent = text;
+  $("status").className = isError ? "error" : "";
+}
+
+function currentFormat() {
+  return document.querySelector('input[name="format"]:checked').value;
+}
+
+function showResult() {
+  const fmt = currentFormat();
+  $("output").value = state.texts[fmt] || "";
+  $("open").disabled = !state.url;
+}
+
+function stopPreview() {
+  if (!playing) return;
+  playing.source.stop();
+  playing.ctx.close();
+  playing = null;
+  $("preview").textContent = "Preview";
+}
+
+function startPreview() {
+  const repeat = state.rate < 8000 ? Math.ceil(8000 / state.rate) : 1;
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buffer = ctx.createBuffer(1, state.raw.length * repeat, state.rate * repeat);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < state.raw.length; i++) {
+    const v = (state.raw[i] - 127.5) / 127.5;
+    for (let k = 0; k < repeat; k++) data[i * repeat + k] = v;
+  }
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  source.connect(ctx.destination);
+  source.start();
+  playing = { ctx: ctx, source: source };
+  $("preview").textContent = "Stop";
+}
+
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type: type }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    $("output").select();
+    document.execCommand("copy");
+  }
+}
+
+async function convert() {
+  const file = $("file").files[0];
+  if (!file) {
+    setStatus("Choose an audio file first.", true);
+    return;
+  }
+  const rate = Math.round(readNumber("rate", 8000));
+  if (rate < 1000 || rate > 48000) {
+    setStatus("Sample rate must be between 1000 and 48000 Hz.", true);
+    return;
+  }
+  const start = Math.max(0, readNumber("start", 0));
+  const duration = readNumber("duration", 0);
+  const highpass = readNumber("highpass", 40);
+  let lowpass = $("lowpass").value.trim() === "" ? Math.min(3500, rate * 0.4375) : readNumber("lowpass", 0);
+  if (lowpass >= rate / 2) lowpass = 0;
+
+  $("go").disabled = true;
+  stopPreview();
+  setStatus("Converting...", false);
+  try {
+    const { samples, sourceRate } = await decodeAndFilter(file, start, duration, highpass, lowpass);
+    let gain = 1;
+    if ($("normalize").checked) {
+      let peak = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const a = Math.abs(samples[i]);
+        if (a > peak) peak = a;
+      }
+      if (peak > 0) gain = 0.95 / peak;
+    }
+    const raw = toU8(samples, sourceRate, rate, gain);
+    const code = makeFormula(raw);
+    const texts = { formula: code };
+    let url = "";
+    try {
+      url = await makeLink(code, rate);
+      texts.link = url;
+      texts.html = makeHtml(url);
+    } catch (e) {
+      texts.link = "Link generation needs a browser with CompressionStream support.";
+      texts.html = texts.link;
+    }
+    state.texts = texts;
+    state.raw = raw;
+    state.rate = rate;
+    state.url = url;
+    state.base = file.name.replace(/\.[^.]+$/, "") || "audio";
+    $("result").hidden = false;
+    showResult();
+    const kb = n => (n / 1024).toFixed(1) + " KB";
+    let msg = `${(raw.length / rate).toFixed(1)} s at ${rate} Hz, ${kb(raw.length)} of raw data, formula ${kb(code.length)}.`;
+    if (raw.length > 200000) msg += " That is a lot of data, the editor may lag. Reduce the length or the rate.";
+    setStatus(msg, false);
+  } catch (e) {
+    setStatus("Failed: " + (e && e.message ? e.message : "this browser could not decode the file."), true);
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+$("go").addEventListener("click", convert);
+document.querySelectorAll('input[name="format"]').forEach(r => r.addEventListener("change", showResult));
+$("copy").addEventListener("click", () => copyText($("output").value));
+$("open").addEventListener("click", () => { if (state.url) window.open(state.url, "_blank", "noopener"); });
+$("preview").addEventListener("click", () => { if (playing) stopPreview(); else if (state.raw) startPreview(); });
+$("download").addEventListener("click", () => {
+  const fmt = currentFormat();
+  const names = { formula: state.base + ".txt", link: state.base + "_link.txt", html: state.base + ".html" };
+  download(names[fmt], state.texts[fmt] || "", fmt === "html" ? "text/html" : "text/plain");
+});
+</script>
+</body>
+</html>
